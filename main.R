@@ -278,3 +278,8 @@ create_fitted_curves_data <- function(fitted_models, rarefaction_data) {
   
   return(bind_rows(fitted_curve_data))
 }
+
+# Execute the main analysis
+cat("Starting ORACLE-seq rarefaction analysis...\n")
+results <- run_rarefaction_analysis()
+cat("Analysis complete!\n")
