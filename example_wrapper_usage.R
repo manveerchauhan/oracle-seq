@@ -18,6 +18,7 @@ source("run_oracle_seq.R")
 # │   └── reports/
 
 run_oracle_seq(
+  oracle_seq_dir = "/data/gpfs/projects/punim2251/Aim1_LongBench/oracle-seq-dev",
   data_file = "data/rarefaction_curves.rds",
   analysis_name = "lung_cancer_study",
   output_dir = "oracle_results",
@@ -32,6 +33,7 @@ run_oracle_seq(
 # Use different marginal returns thresholds
 
 run_oracle_seq(
+  oracle_seq_dir = "/data/gpfs/projects/punim2251/Aim1_LongBench/oracle-seq-dev",
   data_file = "data/rarefaction_curves.rds",
   analysis_name = "high_resolution_analysis",
   output_dir = "oracle_results",
@@ -46,6 +48,7 @@ run_oracle_seq(
 # For faster analysis during development
 
 run_oracle_seq(
+  oracle_seq_dir = "/data/gpfs/projects/punim2251/Aim1_LongBench/oracle-seq-dev",
   data_file = "data/rarefaction_curves.rds",
   analysis_name = "quick_test",
   output_dir = "oracle_results",
@@ -61,6 +64,7 @@ run_oracle_seq(
 
 # First run
 run_oracle_seq(
+  oracle_seq_dir = "/data/gpfs/projects/punim2251/Aim1_LongBench/oracle-seq-dev",
   data_file = "data/protocol_comparison.rds",
   analysis_name = "protocol_comparison",
   output_dir = "oracle_results",
@@ -72,6 +76,7 @@ run_oracle_seq(
 
 # Second run with same name - will create "protocol_comparison_2"
 run_oracle_seq(
+  oracle_seq_dir = "/data/gpfs/projects/punim2251/Aim1_LongBench/oracle-seq-dev",
   data_file = "data/protocol_comparison_updated.rds",
   analysis_name = "protocol_comparison",  # Same name
   output_dir = "oracle_results",
@@ -87,6 +92,7 @@ run_oracle_seq(
 
 # This will fail with clear error message
 # run_oracle_seq(
+#   oracle_seq_dir = "/data/gpfs/projects/punim2251/Aim1_LongBench/oracle-seq-dev",
 #   data_file = "data/rarefaction_curves.rds",
 #   analysis_name = "incomplete_analysis",
 #   output_dir = "oracle_results"

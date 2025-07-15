@@ -1,11 +1,11 @@
 # Main analysis workflow
 
-# Source all modules
-source("R/config.R")
-source("R/utils.R")
-source("R/models.R")
-source("R/analysis.R")
-source("R/plots.R")
+# Load required modules for ORACLE-seq analysis
+source(file.path(ORACLE_SEQ_DIR, "R", "config.R"))
+source(file.path(ORACLE_SEQ_DIR, "R", "utils.R"))
+source(file.path(ORACLE_SEQ_DIR, "R", "models.R"))
+source(file.path(ORACLE_SEQ_DIR, "R", "analysis.R"))
+source(file.path(ORACLE_SEQ_DIR, "R", "plots.R"))
 
 # Main analysis function
 run_rarefaction_analysis <- function() {

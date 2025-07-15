@@ -8,6 +8,7 @@
 #' Main wrapper function that provides a simple interface for running complete
 #' ORACLE-seq rarefaction curve analysis with automatic output organization.
 #'
+#' @param oracle_seq_dir Character string specifying path to oracle-seq directory containing R/ and main.R
 #' @param data_file Character string specifying path to rarefaction data file (RDS format)
 #' @param analysis_name Character string specifying name for the analysis (used for output directory)
 #' @param output_dir Character string specifying base output directory path
@@ -41,6 +42,7 @@
 #' @examples
 #' # Run complete ORACLE-seq analysis
 #' run_oracle_seq(
+#'   oracle_seq_dir = "/path/to/oracle-seq-dev",
 #'   data_file = "data/rarefaction_curves.rds",
 #'   analysis_name = "lung_cancer_study",
 #'   output_dir = "oracle_results",
@@ -49,7 +51,7 @@
 #'   use_bayesian_model_averaging = TRUE,
 #'   confidence_level = 0.95
 #' )
-run_oracle_seq <- function(data_file, analysis_name, output_dir, thresholds, 
+run_oracle_seq <- function(oracle_seq_dir, data_file, analysis_name, output_dir, thresholds, 
                           bootstrap_samples, use_bayesian_model_averaging, confidence_level) {
   
   # === PARAMETER VALIDATION ===
@@ -59,6 +61,9 @@ run_oracle_seq <- function(data_file, analysis_name, output_dir, thresholds,
   # Check for missing required parameters
   missing_params <- c()
   
+  if (missing(oracle_seq_dir) || is.null(oracle_seq_dir)) {
+    missing_params <- c(missing_params, "oracle_seq_dir")
+  }
   if (missing(data_file) || is.null(data_file)) {
     missing_params <- c(missing_params, "data_file")
   }
@@ -92,6 +97,28 @@ run_oracle_seq <- function(data_file, analysis_name, output_dir, thresholds,
   }
   
   # === INPUT VALIDATION ===
+  
+  # Check if oracle-seq directory exists and contains required files
+  if (!dir.exists(oracle_seq_dir)) {
+    cat("ERROR: ORACLE-seq directory not found:", oracle_seq_dir, "\n")
+    stop("ORACLE-seq directory not found")
+  }
+  
+  required_files <- c("R/utils.R", "R/config.R", "R/models.R", "R/analysis.R", "R/plots.R", "main.R")
+  missing_files <- c()
+  for (file in required_files) {
+    if (!file.exists(file.path(oracle_seq_dir, file))) {
+      missing_files <- c(missing_files, file)
+    }
+  }
+  
+  if (length(missing_files) > 0) {
+    cat("ERROR: Missing required ORACLE-seq files in", oracle_seq_dir, ":\n")
+    for (file in missing_files) {
+      cat("  -", file, "\n")
+    }
+    stop("Missing ORACLE-seq files")
+  }
   
   # Check if data file exists
   if (!file.exists(data_file)) {
@@ -173,15 +200,21 @@ run_oracle_seq <- function(data_file, analysis_name, output_dir, thresholds,
   sink(log_file, append = FALSE, split = TRUE)
   
   tryCatch({
+    # Use the provided oracle-seq directory path
+    cat("Loading ORACLE-seq modules from:", oracle_seq_dir, "\n")
+    
+    # Set global variable for main.R to use
+    assign("ORACLE_SEQ_DIR", oracle_seq_dir, envir = .GlobalEnv)
+    
     # Load required libraries
-    source("R/utils.R")
+    source(file.path(oracle_seq_dir, "R", "utils.R"))
     load_libraries()
     
     # Load configuration
-    source("R/config.R")
+    source(file.path(oracle_seq_dir, "R", "config.R"))
     
     # Run the main analysis pipeline
-    source("main.R")
+    source(file.path(oracle_seq_dir, "main.R"))
     
     cat("\n", paste(rep("=", 50), collapse = ""), "\n")
     cat("ORACLE-seq analysis completed successfully!\n")
@@ -314,6 +347,7 @@ update_pipeline_config <- function(analysis_dir, data_file, thresholds,
 
 # Example usage (commented out):
 # run_oracle_seq(
+#   oracle_seq_dir = "/data/gpfs/projects/punim2251/Aim1_LongBench/oracle-seq-dev",
 #   data_file = "data/rarefaction_curves.rds",
 #   analysis_name = "lung_cancer_study",
 #   output_dir = "oracle_results",
