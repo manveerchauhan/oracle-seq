@@ -129,12 +129,29 @@ run_rarefaction_analysis <- function() {
     }
   }
   
+  # Calculate TD75/TD50 metrics
+  cat("\nCalculating TD75/TD50 metrics...\n")
+  td_metrics_results <- calculate_td_metrics(
+    fitted_models_with_uncertainty = fitted_models_with_uncertainty,
+    rarefaction_data = rarefaction_data,
+    bootstrap_samples = N_BOOTSTRAP
+  )
+
   # Save results with enhanced data
   cat("\nSaving enhanced results...\n")
   saveRDS(fitted_models_with_uncertainty, file.path(STATS_DIR, "fitted_models_with_uncertainty_mvp.rds"))
   write.csv(marginal_returns_results, 
             file.path(STATS_DIR, "enhanced_marginal_returns_mvp.csv"), 
             row.names = FALSE)
+  
+  # Save TD75/TD50 results
+  if (nrow(td_metrics_results) > 0) {
+    write.csv(td_metrics_results,
+              file.path(STATS_DIR, "td_metrics_results.csv"),
+              row.names = FALSE)
+    saveRDS(td_metrics_results, file.path(STATS_DIR, "td_metrics_results.rds"))
+    cat("TD75/TD50 results saved to:", file.path(STATS_DIR, "td_metrics_results.csv"), "\n")
+  }
   
   # Create plots using the enhanced fitted models
   cat("\nCreating comprehensive visualizations...\n")
@@ -210,6 +227,20 @@ run_rarefaction_analysis <- function() {
     save_plots(bootstrap_plots, "bootstrap_uncertainty_distributions.pdf", width = 14, height = 10)
   }
   
+  # 8b. TD75/TD50 enhanced rarefaction plots
+  if (nrow(td_metrics_results) > 0) {
+    cat("  Creating TD75/TD50 enhanced rarefaction plots...\n")
+    td_enhanced_plots <- create_td_enhanced_rarefaction_plots(
+      fitted_models_with_uncertainty, 
+      rarefaction_data, 
+      td_metrics_results, 
+      reads_per_cell_converter
+    )
+    if (length(td_enhanced_plots) > 0) {
+      save_plots(td_enhanced_plots, "td_enhanced_rarefaction_plots.pdf", width = 12, height = 8)
+    }
+  }
+  
   # 9. Generate model equations report
   cat("  Generating model equations report...\n")
   create_model_equations_report(fitted_models_with_uncertainty, file.path(STATS_DIR, "model_equations_report.txt"))
@@ -222,11 +253,23 @@ run_rarefaction_analysis <- function() {
   cat("  Generating model competition analysis report...\n")
   create_model_competition_analysis_report(fitted_models_with_uncertainty, file.path(STATS_DIR, "model_competition_analysis_report.txt"))
   
+  # 12. Generate TD75/TD50 HTML report
+  if (nrow(td_metrics_results) > 0) {
+    cat("  Generating TD75/TD50 HTML report...\n")
+    ensure_directory(file.path(BASE_DIR, "reports"))
+    create_td_metrics_html_report(
+      td_metrics_results,
+      reads_per_cell_converter, 
+      file.path(BASE_DIR, "reports", "td_metrics_analysis.html")
+    )
+  }
+  
   cat("\n=== ENHANCED ANALYSIS COMPLETE ===\n")
   
   return(list(
     fitted_models = fitted_models_with_uncertainty,
     marginal_returns = marginal_returns_results,
+    td_metrics = td_metrics_results,
     reads_converter = reads_per_cell_converter
   ))
 }

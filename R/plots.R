@@ -391,6 +391,316 @@ create_extended_saturation_plots <- function(fitted_models, rarefaction_data, ma
   return(plot_list)
 }
 
+#' Add TD75/TD50 Markers to Rarefaction Plots
+#'
+#' Adds TD75 and TD50 markers to existing rarefaction curve plots for easy
+#' identification of transcript discovery efficiency benchmarks.
+#'
+#' @param plot_object ggplot object to add markers to
+#' @param td_metrics_results Data frame containing TD75/TD50 results for the specific curve
+#' @param reads_per_cell_converter Function to convert total reads to reads per cell
+#' @param curve_id Character string identifying the current curve
+#' @param show_labels Logical indicating whether to show TD75/TD50 labels
+#'
+#' @return Modified ggplot object with TD75/TD50 markers
+#'
+#' @details
+#' **Marker Design:**
+#' - TD75: Solid vertical line in orange with triangle marker
+#' - TD50: Dashed vertical line in blue with circle marker  
+#' - Optional labels with depth values and confidence intervals
+#' - Markers are positioned at estimated sequencing depths
+#'
+#' **Visual Elements:**
+#' - Vertical lines showing required sequencing depths
+#' - Point markers at intersection with fitted curve
+#' - Optional text annotations with confidence intervals
+#' - Color coding: TD75 (orange), TD50 (blue)
+#'
+#' **Usage Context:**
+#' Called by plotting functions to add TD markers to rarefaction plots
+#' for practical interpretation of sequencing depth requirements.
+#'
+#' @examples
+#' # Add TD markers to a rarefaction plot
+#' plot_with_td <- add_td_markers_to_plot(
+#'   base_plot,
+#'   td_metrics_results,
+#'   reads_per_cell_converter,
+#'   "ONT_SC_Genes Discovery"
+#' )
+add_td_markers_to_plot <- function(plot_object, td_metrics_results, reads_per_cell_converter, curve_id, show_labels = TRUE) {
+  # Filter TD results for this specific curve
+  curve_td_data <- td_metrics_results %>%
+    filter(curve_id == !!curve_id)
+  
+  if (nrow(curve_td_data) == 0) {
+    return(plot_object)  # No TD data for this curve, return unmodified plot
+  }
+  
+  # Define TD marker styling
+  td_colors <- c("TD75" = "#FF8C00", "TD50" = "#1E90FF")  # Orange and blue
+  td_linetypes <- c("TD75" = "solid", "TD50" = "dashed")
+  td_shapes <- c("TD75" = 17, "TD50" = 16)  # Triangle and circle
+  
+  # Add markers for each TD metric
+  for (i in 1:nrow(curve_td_data)) {
+    row <- curve_td_data[i, ]
+    metric <- row$metric
+    depth <- row$estimated_reads
+    target_features <- row$target_features
+    
+    # Convert to reads per cell for consistency
+    depth_rpc <- reads_per_cell_converter(depth)
+    
+    # Create confidence interval text
+    ci_text <- if (!is.na(row$lower_ci) && !is.na(row$upper_ci)) {
+      paste0("\n[", scales::comma(round(reads_per_cell_converter(row$lower_ci))), 
+             "-", scales::comma(round(reads_per_cell_converter(row$upper_ci))), "]")
+    } else {
+      ""
+    }
+    
+    # Add vertical line at TD depth
+    plot_object <- plot_object +
+      geom_vline(
+        xintercept = depth_rpc,
+        color = td_colors[metric],
+        linetype = td_linetypes[metric],
+        linewidth = 1.2,
+        alpha = 0.8
+      )
+    
+    # Add point marker at intersection with curve
+    plot_object <- plot_object +
+      annotate(
+        "point",
+        x = depth_rpc,
+        y = target_features,
+        color = td_colors[metric],
+        shape = td_shapes[metric],
+        size = 4,
+        alpha = 0.9
+      )
+    
+    # Add text label if requested
+    if (show_labels) {
+      label_text <- paste0(
+        metric, ": ", scales::comma(round(depth_rpc)), 
+        " reads/cell", ci_text
+      )
+      
+      # Position label at top of plot area
+      plot_object <- plot_object +
+        annotate(
+          "text",
+          x = depth_rpc,
+          y = Inf,
+          label = label_text,
+          color = td_colors[metric],
+          vjust = if (metric == "TD75") 1.2 else 2.5,  # Stack TD50 below TD75
+          hjust = 0.5,
+          size = 3,
+          fontface = "bold",
+          alpha = 0.8
+        )
+    }
+  }
+  
+  return(plot_object)
+}
+
+#' Create TD75/TD50 Enhanced Rarefaction Plots
+#'
+#' Creates rarefaction curve plots with integrated TD75/TD50 markers for 
+#' practical interpretation of sequencing efficiency benchmarks.
+#'
+#' @param fitted_models Data frame containing fitted model results
+#' @param rarefaction_data Original rarefaction curve data
+#' @param td_metrics_results Data frame containing TD75/TD50 calculations
+#' @param reads_per_cell_converter Function to convert total reads to reads per cell
+#'
+#' @return List of ggplot objects with TD markers
+#'
+#' @details
+#' **Enhanced Features:**
+#' - Standard rarefaction curves with fitted models
+#' - TD75/TD50 vertical markers showing required depths
+#' - Confidence intervals from bootstrap analysis
+#' - Reads per cell conversion for practical interpretation
+#' - Protocol comparison across technologies and sample types
+#'
+#' **Visual Design:**
+#' - Consistent color scheme with existing ORACLE-seq plots
+#' - Clear TD marker differentiation (TD75 orange, TD50 blue)
+#' - Integrated legends and annotations
+#' - Publication-quality formatting
+#'
+#' **Output Format:**
+#' Returns named list of plots suitable for save_plots() function.
+#' Each plot focuses on a specific protocol with TD markers.
+#'
+#' @examples
+#' # Create TD-enhanced plots
+#' td_plots <- create_td_enhanced_rarefaction_plots(
+#'   fitted_models_with_uncertainty,
+#'   rarefaction_data,
+#'   td_metrics_results,
+#'   reads_per_cell_converter
+#' )
+create_td_enhanced_rarefaction_plots <- function(fitted_models, rarefaction_data, td_metrics_results, reads_per_cell_converter) {
+  plot_list <- list()
+  
+  cat("Creating TD75/TD50 enhanced rarefaction plots...\n")
+  
+  # Process each fitted model
+  for (i in 1:nrow(fitted_models)) {
+    if (!fitted_models$convergence[i]) next
+    
+    curve_id <- fitted_models$curve_id[i]
+    model_result <- fitted_models$fitted_model[[i]]
+    
+    cat("  Creating TD-enhanced plot for:", curve_id, "\n")
+    
+    # Get original data for this curve
+    orig_data <- rarefaction_data %>% filter(curve_id == !!curve_id)
+    
+    # Create extended prediction range
+    x_max_orig <- max(orig_data$total_reads_unified)
+    x_extend <- x_max_orig * 3  # Extend 3x for TD visualization
+    x_seq <- seq(min(orig_data$total_reads_unified), x_extend, length.out = 200)
+    
+    # Generate fitted curve predictions
+    fitted_predictions <- predict(model_result$fit_object, newdata = data.frame(x = x_seq))
+    
+    # Create fitted curve data with reads per cell conversion
+    fitted_data <- tibble(
+      total_reads_unified = x_seq,
+      featureNum_fitted = fitted_predictions,
+      reads_per_cell = reads_per_cell_converter(x_seq),
+      curve_type = ifelse(x_seq <= x_max_orig, "observed_range", "extrapolated")
+    )
+    
+    # Convert original data to reads per cell
+    orig_data_converted <- orig_data %>%
+      mutate(reads_per_cell = reads_per_cell_converter(total_reads_unified))
+    
+    # Extract metadata for plot labels
+    technology <- str_extract(curve_id, "^[^_]+")
+    parts <- str_split(curve_id, "_")[[1]]
+    sample_type <- if (length(parts) >= 2) parts[2] else "Unknown"
+    feature_type <- str_remove(paste(parts[3:length(parts)], collapse = " "), " Discovery")
+    
+    # Create plot title
+    sample_display <- case_when(
+      sample_type == "SC" ~ "Single-Cell",
+      sample_type == "SN" ~ "Single-Nucleus",
+      TRUE ~ sample_type
+    )
+    plot_title <- paste0(technology, " ", sample_display, " ", feature_type, " Discovery")
+    
+    # Model info for subtitle
+    model_display <- case_when(
+      model_result$model == "michaelis_menten" ~ "Michaelis-Menten",
+      model_result$model == "asymptotic_exp" ~ "Asymptotic Exponential", 
+      model_result$model == "power_law" ~ "Power Law",
+      model_result$model == "logarithmic" ~ "Logarithmic",
+      model_result$model == "hill" ~ "Hill Equation",
+      TRUE ~ str_to_title(str_replace_all(model_result$model, "_", " "))
+    )
+    
+    # Base plot
+    p <- ggplot() +
+      # Fitted curve (different styles for observed vs extrapolated)
+      geom_line(
+        data = fitted_data %>% filter(curve_type == "observed_range"),
+        aes(x = reads_per_cell, y = featureNum_fitted),
+        color = get_color_map()[technology],
+        linewidth = 1.5,
+        alpha = 0.9
+      ) +
+      geom_line(
+        data = fitted_data %>% filter(curve_type == "extrapolated"),
+        aes(x = reads_per_cell, y = featureNum_fitted),
+        color = get_color_map()[technology],
+        linewidth = 1.2,
+        linetype = "dashed",
+        alpha = 0.7
+      ) +
+      # Original data points
+      geom_point(
+        data = orig_data_converted,
+        aes(x = reads_per_cell, y = featureNum),
+        color = get_color_map()[technology],
+        shape = SHAPE_MAP[sample_type],
+        size = 3,
+        alpha = 0.9
+      ) +
+      # Vertical line at current max depth
+      geom_vline(
+        xintercept = reads_per_cell_converter(x_max_orig),
+        linetype = "dotted",
+        color = "gray50",
+        alpha = 0.6
+      ) +
+      # Labels and theme
+      labs(
+        title = plot_title,
+        subtitle = paste0(model_display, " Model | R² = ", round(fitted_models$r_squared[i], 3), " | TD75/TD50 Analysis"),
+        x = "Estimated Median Reads per Cell",
+        y = paste0("Number of ", feature_type, " Detected"),
+        caption = "Solid line: observed data range | Dashed line: model extrapolation | TD markers: transcript discovery benchmarks"
+      ) +
+      theme_minimal() +
+      theme(
+        text = element_text(size = 11),
+        plot.title = element_text(size = 13, face = "bold"),
+        plot.subtitle = element_text(size = 10, color = "gray50"),
+        plot.caption = element_text(size = 8, color = "gray60", hjust = 0),
+        axis.text.x = element_text(angle = 0, hjust = 0.5),
+        panel.grid.minor = element_blank(),
+        legend.position = "bottom"
+      ) +
+      scale_x_continuous(
+        labels = scales::comma,
+        breaks = scales::pretty_breaks(n = 6)
+      ) +
+      scale_y_continuous(
+        labels = scales::comma,
+        breaks = scales::pretty_breaks(n = 6)
+      )
+    
+    # Add TD75/TD50 markers
+    p <- add_td_markers_to_plot(p, td_metrics_results, reads_per_cell_converter, curve_id, show_labels = TRUE)
+    
+    # Add annotation for observed vs extrapolated regions
+    p <- p +
+      annotate(
+        "text",
+        x = reads_per_cell_converter(x_max_orig * 0.7),
+        y = max(fitted_data$featureNum_fitted) * 0.95,
+        label = "Observed\nData",
+        size = 3,
+        alpha = 0.7,
+        hjust = 0.5
+      ) +
+      annotate(
+        "text", 
+        x = reads_per_cell_converter(x_extend * 0.8),
+        y = max(fitted_data$featureNum_fitted) * 0.95,
+        label = "Model\nExtrapolation",
+        size = 3,
+        alpha = 0.7,
+        hjust = 0.5
+      )
+    
+    plot_list[[curve_id]] <- p
+  }
+  
+  cat("Created", length(plot_list), "TD-enhanced rarefaction plots\n")
+  return(plot_list)
+}
+
 # Create combined extended saturation plots
 create_combined_extended_saturation_plots <- function(fitted_models, rarefaction_data, marginal_returns_results, reads_per_cell_converter) {
   plot_list <- list()

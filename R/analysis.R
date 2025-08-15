@@ -1311,6 +1311,906 @@ create_summary_analysis_report <- function(fitted_models, marginal_returns_resul
   close(con)
 }
 
+#' Calculate TD75/TD50 (Transcript Discovery) Metrics
+#'
+#' Implements TD75/TD50 metrics that quantify sequencing depths needed to reach
+#' 75% and 50% of the "meaningful discovery ceiling". The ceiling is defined as
+#' the total features discovered at exactly 10 features/million reads (f/M).
+#'
+#' @param fitted_models_with_uncertainty Data frame containing fitted model results
+#' @param rarefaction_data Original rarefaction curve data  
+#' @param bootstrap_samples Number of bootstrap iterations for confidence intervals
+#'
+#' @return Data frame with TD75/TD50 metrics:
+#'   - curve_id: Curve identifier
+#'   - metric: "TD75" or "TD50"
+#'   - discovery_ceiling_features: Total features at 10 f/M threshold (ceiling)
+#'   - target_features: Target feature count (75% or 50% of ceiling)
+#'   - estimated_reads: Sequencing depth needed to reach target
+#'   - lower_ci, upper_ci: Bootstrap confidence intervals for estimated reads
+#'   - cv: Coefficient of variation for read depth estimates
+#'   - stability: Model stability classification
+#'   - extrapolation_factor: How far beyond observed data the prediction extends
+#'   - technology, sample_type, feature_type: Metadata from curve_id
+#'
+#' @details
+#' **TD75/TD50 Methodology:**
+#' 1. **Discovery Ceiling**: Calculate total features at 10 f/M using fitted models
+#' 2. **Target Calculation**: TD75 = 75% of ceiling, TD50 = 50% of ceiling
+#' 3. **Depth Estimation**: Use inverse prediction to find reads needed for targets
+#' 4. **Bootstrap CI**: Quantify uncertainty in depth estimates via bootstrap
+#' 
+#' **Model Requirements:**
+#' - Uses successfully converged models only
+#' - Leverages existing bootstrap framework for uncertainty quantification
+#' - Integrates with current marginal returns analysis
+#'
+#' **Interpretation:**
+#' - TD75: Sequencing depth for substantial feature discovery (75% of ceiling)
+#' - TD50: Sequencing depth for moderate feature discovery (50% of ceiling)  
+#' - Lower values indicate more efficient protocols
+#' - Confidence intervals reflect prediction uncertainty
+#'
+#' @examples
+#' # Calculate TD75/TD50 metrics
+#' td_metrics <- calculate_td_metrics(
+#'   fitted_models_with_uncertainty,
+#'   rarefaction_data,
+#'   bootstrap_samples = 1000
+#' )
+#' 
+#' # View results
+#' td_summary <- td_metrics %>%
+#'   select(curve_id, metric, target_features, estimated_reads, lower_ci, upper_ci)
+#' print(td_summary)
+calculate_td_metrics <- function(fitted_models_with_uncertainty, rarefaction_data, bootstrap_samples = N_BOOTSTRAP) {
+  cat("=== CALCULATING TD75/TD50 METRICS ===\n\n")
+  
+  # Define TD thresholds (75% and 50% of discovery ceiling)
+  td_percentages <- c(75, 50)
+  discovery_ceiling_threshold <- 10  # f/M - threshold that defines "ceiling"
+  
+  # Initialize results storage
+  td_results <- data.frame()
+  
+  # Process each curve
+  for (i in 1:nrow(fitted_models_with_uncertainty)) {
+    if (!fitted_models_with_uncertainty$convergence[i]) next
+    
+    curve_id <- fitted_models_with_uncertainty$curve_id[i]
+    model_result <- fitted_models_with_uncertainty$fitted_model[[i]]
+    
+    cat("Processing TD metrics for:", curve_id, "\n")
+    
+    # Step 1: Calculate discovery ceiling (features at 10 f/M)
+    ceiling_threshold <- find_threshold_depths(model_result, discovery_ceiling_threshold)
+    
+    if (nrow(ceiling_threshold) == 0) {
+      cat("  Warning: Could not calculate discovery ceiling for", curve_id, "\n")
+      next
+    }
+    
+    discovery_ceiling <- ceiling_threshold$features[1]
+    cat("  Discovery ceiling (10 f/M):", scales::comma(round(discovery_ceiling)), "features\n")
+    
+    # Step 2: Calculate TD75/TD50 target feature counts
+    for (td_pct in td_percentages) {
+      target_features <- discovery_ceiling * (td_pct / 100)
+      metric_name <- paste0("TD", td_pct)
+      
+      cat("  ", metric_name, "target:", scales::comma(round(target_features)), "features\n")
+      
+      # Step 3: Use inverse prediction to find sequencing depth for target
+      depth_estimate <- tryCatch({
+        # Use model to find depth that yields target_features
+        # This requires solving: predict(model, depth) = target_features
+        find_depth_for_target_features(model_result, target_features)
+      }, error = function(e) {
+        cat("    Error calculating", metric_name, "depth:", e$message, "\n")
+        return(NA)
+      })
+      
+      if (is.na(depth_estimate) || depth_estimate <= 0) {
+        cat("    Warning: Could not calculate", metric_name, "depth for", curve_id, "\n")
+        next
+      }
+      
+      cat("  ", metric_name, "estimated depth:", scales::comma(round(depth_estimate)), "reads\n")
+      
+      # Step 4: Bootstrap confidence intervals for depth estimate
+      cat("    Running bootstrap for", metric_name, "uncertainty...\n")
+      bootstrap_result <- bootstrap_td_uncertainty(
+        curve_data = rarefaction_data %>% filter(curve_id == !!curve_id),
+        model_type = model_result$model,
+        target_features = target_features,
+        n_boot = bootstrap_samples
+      )
+      
+      # Calculate extrapolation factor
+      max_observed_depth <- max(model_result$x_values)
+      extrapolation_factor <- depth_estimate / max_observed_depth
+      
+      # Determine stability classification
+      stability <- case_when(
+        is.na(bootstrap_result$depth_cv) ~ "Unknown",
+        bootstrap_result$depth_cv < 0.05 ~ "High",
+        bootstrap_result$depth_cv < 0.15 ~ "Moderate", 
+        bootstrap_result$depth_cv < 0.30 ~ "Low",
+        TRUE ~ "Very Low"
+      )
+      
+      # Extract metadata from curve_id
+      curve_parts <- str_split(curve_id, "_")[[1]]
+      technology <- ifelse(length(curve_parts) >= 1, curve_parts[1], NA)
+      sample_type <- ifelse(length(curve_parts) >= 2, curve_parts[2], NA)  
+      feature_type <- ifelse(length(curve_parts) >= 3, 
+                           str_remove(paste(curve_parts[3:length(curve_parts)], collapse = " "), " Discovery"),
+                           NA)
+      
+      # Store results
+      td_row <- data.frame(
+        curve_id = curve_id,
+        metric = metric_name,
+        discovery_ceiling_features = discovery_ceiling,
+        target_features = target_features,
+        estimated_reads = depth_estimate,
+        lower_ci = bootstrap_result$depth_ci[1],
+        upper_ci = bootstrap_result$depth_ci[2], 
+        cv = bootstrap_result$depth_cv,
+        stability = stability,
+        extrapolation_factor = extrapolation_factor,
+        technology = technology,
+        sample_type = sample_type,
+        feature_type = feature_type,
+        model_type = model_result$model,
+        convergence_rate = bootstrap_result$convergence_rate,
+        stringsAsFactors = FALSE
+      )
+      
+      td_results <- rbind(td_results, td_row)
+    }
+    
+    cat("\n")
+  }
+  
+  if (nrow(td_results) > 0) {
+    cat("TD75/TD50 metrics calculated for", length(unique(td_results$curve_id)), "curves\n")
+    
+    # Summary statistics
+    cat("\nTD METRICS SUMMARY:\n")
+    td_summary <- td_results %>%
+      group_by(metric) %>%
+      summarise(
+        n_curves = n(),
+        mean_reads = mean(estimated_reads, na.rm = TRUE),
+        median_reads = median(estimated_reads, na.rm = TRUE),
+        mean_cv = mean(cv, na.rm = TRUE),
+        .groups = 'drop'
+      )
+    
+    for (i in 1:nrow(td_summary)) {
+      cat(sprintf("  %s: %d curves, median depth = %s reads (mean CV = %.3f)\n",
+                  td_summary$metric[i],
+                  td_summary$n_curves[i],
+                  scales::comma(round(td_summary$median_reads[i])),
+                  td_summary$mean_cv[i]))
+    }
+  } else {
+    cat("Warning: No TD75/TD50 metrics could be calculated\n")
+  }
+  
+  cat("\n=== TD75/TD50 CALCULATION COMPLETE ===\n")
+  return(td_results)
+}
+
+#' Find Sequencing Depth for Target Feature Count  
+#'
+#' Uses inverse prediction to determine the sequencing depth needed to 
+#' achieve a specific target number of features. This is the core calculation
+#' for TD75/TD50 metrics.
+#'
+#' @param model_result List containing fitted model information
+#' @param target_features Numeric target number of features to achieve
+#'
+#' @return Numeric sequencing depth estimate, or NA if calculation fails
+#'
+#' @details
+#' **Inverse Prediction Strategy:**
+#' Uses numerical optimization to solve: predict(model, depth) = target_features
+#' 
+#' **Search Range:**
+#' - Lower bound: Minimum observed depth
+#' - Upper bound: 100x maximum observed depth (allows extrapolation)
+#'
+#' **Numerical Method:**
+#' Uses optimize() to find depth that minimizes |predicted - target|
+#'
+#' @examples
+#' # Find depth for target feature count
+#' depth <- find_depth_for_target_features(model_result, target_features = 15000)
+#' if (!is.na(depth)) {
+#'   cat("Depth needed:", scales::comma(depth), "reads")
+#' }
+find_depth_for_target_features <- function(model_result, target_features) {
+  # Define search bounds
+  min_depth <- min(model_result$x_values)
+  max_depth <- max(model_result$x_values) * 100  # Allow extrapolation
+  
+  # Objective function: minimize |predicted - target|
+  objective_function <- function(depth) {
+    predicted <- predict(model_result$fit_object, newdata = data.frame(x = depth))
+    return(abs(as.numeric(predicted) - target_features))
+  }
+  
+  # Use numerical optimization to find optimal depth
+  tryCatch({
+    result <- optimize(
+      f = objective_function,
+      interval = c(min_depth, max_depth),
+      maximum = FALSE  # We want to minimize the objective function
+    )
+    
+    # Validate result
+    optimal_depth <- result$minimum
+    final_prediction <- predict(model_result$fit_object, newdata = data.frame(x = optimal_depth))
+    error <- abs(as.numeric(final_prediction) - target_features)
+    
+    # Check if solution is reasonable (error < 5% of target)
+    if (error / target_features > 0.05) {
+      warning("Large prediction error in inverse solution: ", round(error), " features")
+    }
+    
+    return(optimal_depth)
+    
+  }, error = function(e) {
+    return(NA)
+  })
+}
+
+#' Bootstrap Uncertainty for TD Metrics
+#'
+#' Performs bootstrap resampling to quantify uncertainty in TD75/TD50 depth
+#' estimates. This adapts the existing bootstrap framework for TD-specific
+#' uncertainty quantification.
+#'
+#' @param curve_data Data frame containing rarefaction curve data
+#' @param model_type Character string specifying the model type  
+#' @param target_features Numeric target number of features
+#' @param n_boot Number of bootstrap iterations
+#'
+#' @return List containing uncertainty estimates:
+#'   - depth_ci: 95% confidence interval for depth
+#'   - depth_mean, depth_sd: Summary statistics
+#'   - depth_cv: Coefficient of variation
+#'   - convergence_rate: Bootstrap success rate
+#'   - n_valid: Number of valid bootstrap estimates
+#'
+#' @details
+#' **Bootstrap Procedure:**
+#' 1. Generate bootstrap samples of rarefaction data
+#' 2. Fit model to each bootstrap sample  
+#' 3. Calculate inverse prediction for target features
+#' 4. Compute confidence intervals from bootstrap distribution
+#'
+#' **Quality Control:**
+#' - Filters invalid predictions (negative, infinite values)
+#' - Requires minimum 10 successful bootstrap iterations
+#' - Reports convergence diagnostics
+#'
+#' @examples
+#' # Bootstrap TD uncertainty
+#' uncertainty <- bootstrap_td_uncertainty(
+#'   curve_data, "michaelis_menten", target_features = 12000, n_boot = 500
+#' )
+#' cat("95% CI:", uncertainty$depth_ci)
+bootstrap_td_uncertainty <- function(curve_data, model_type, target_features, n_boot = 1000) {
+  # Prepare data
+  x_orig <- curve_data$total_reads_unified
+  y_orig <- curve_data$featureNum
+  n_points <- length(x_orig)
+  
+  # Initialize storage
+  bootstrap_depths <- numeric(n_boot)
+  convergence_count <- 0
+  
+  # Bootstrap loop
+  for (i in 1:n_boot) {
+    # Generate bootstrap sample
+    boot_indices <- sample(n_points, n_points, replace = TRUE)
+    x_boot <- x_orig[boot_indices]
+    y_boot <- y_orig[boot_indices]
+    
+    tryCatch({
+      # Fit model to bootstrap sample
+      boot_fit <- fit_model_robust(x_boot, y_boot, model_type)
+      
+      if (boot_fit$convergence) {
+        convergence_count <- convergence_count + 1
+        
+        # Calculate depth for target features
+        boot_depth <- find_depth_for_target_features(boot_fit, target_features)
+        
+        # Store valid result
+        if (!is.na(boot_depth) && boot_depth > 0 && is.finite(boot_depth)) {
+          bootstrap_depths[i] <- boot_depth
+        }
+      }
+    }, error = function(e) {
+      # Silent failure for this bootstrap iteration
+    })
+  }
+  
+  # Filter valid results
+  valid_depths <- bootstrap_depths[bootstrap_depths > 0 & is.finite(bootstrap_depths)]
+  
+  # Check minimum bootstrap samples
+  if (length(valid_depths) < 10) {
+    return(list(
+      depth_ci = c(NA, NA),
+      depth_mean = NA,
+      depth_sd = NA, 
+      depth_cv = NA,
+      convergence_rate = convergence_count / n_boot,
+      n_valid = length(valid_depths)
+    ))
+  }
+  
+  # Calculate statistics
+  alpha <- 1 - CONFIDENCE_LEVEL
+  depth_ci <- quantile(valid_depths, c(alpha/2, 1 - alpha/2), na.rm = TRUE)
+  depth_mean <- mean(valid_depths, na.rm = TRUE)
+  depth_sd <- sd(valid_depths, na.rm = TRUE)
+  depth_cv <- depth_sd / depth_mean
+  
+  return(list(
+    depth_ci = as.numeric(depth_ci),
+    depth_mean = depth_mean,
+    depth_sd = depth_sd,
+    depth_cv = depth_cv,
+    convergence_rate = convergence_count / n_boot,
+    n_valid = length(valid_depths)
+  ))
+}
+
+#' Create TD75/TD50 Metrics HTML Report
+#'
+#' Generates a comprehensive HTML report for TD75/TD50 (Transcript Discovery) 
+#' metrics with interactive tables, summary statistics, and practical interpretation.
+#'
+#' @param td_metrics_results Data frame containing TD75/TD50 calculation results
+#' @param reads_per_cell_converter Function to convert total reads to reads per cell  
+#' @param output_file Character string specifying output HTML file path
+#'
+#' @return NULL (side effect: creates HTML file)
+#'
+#' @details
+#' **Report Structure:**
+#' 1. **Executive Summary**: Key findings and recommendations
+#' 2. **TD Metrics Overview**: Methodology and interpretation guide  
+#' 3. **Results Tables**: Interactive tables with sorting and filtering
+#' 4. **Technology Comparison**: Cross-platform efficiency analysis
+#' 5. **Sequencing Recommendations**: Practical depth guidelines
+#' 6. **Statistical Details**: Model uncertainty and confidence intervals
+#'
+#' **Interactive Features:**
+#' - Sortable tables with confidence intervals
+#' - Technology and sample type filtering
+#' - Reads per cell conversion display
+#' - Model stability indicators
+#'
+#' **Practical Interpretation:**
+#' - TD75: Depth for substantial discovery (75% of meaningful ceiling)
+#' - TD50: Depth for moderate discovery (50% of meaningful ceiling)  
+#' - Confidence intervals reflect prediction uncertainty
+#' - Stability ratings guide interpretation confidence
+#'
+#' @examples
+#' # Create TD metrics HTML report
+#' create_td_metrics_html_report(
+#'   td_metrics_results,
+#'   reads_per_cell_converter,
+#'   file.path(REPORTS_DIR, "td_metrics_analysis.html")
+#' )
+create_td_metrics_html_report <- function(td_metrics_results, reads_per_cell_converter, output_file) {
+  cat("Creating TD75/TD50 metrics HTML report...\n")
+  
+  if (nrow(td_metrics_results) == 0) {
+    cat("Warning: No TD metrics results to report\n")
+    return(NULL)
+  }
+  
+  # Prepare summary statistics
+  td_summary <- td_metrics_results %>%
+    group_by(metric) %>%
+    summarise(
+      n_curves = n(),
+      median_reads = median(estimated_reads, na.rm = TRUE),
+      mean_reads = mean(estimated_reads, na.rm = TRUE),
+      min_reads = min(estimated_reads, na.rm = TRUE),
+      max_reads = max(estimated_reads, na.rm = TRUE),
+      median_cv = median(cv, na.rm = TRUE),
+      high_stability = sum(stability == "High", na.rm = TRUE),
+      moderate_stability = sum(stability == "Moderate", na.rm = TRUE),
+      .groups = 'drop'
+    )
+  
+  # Technology comparison
+  tech_comparison <- td_metrics_results %>%
+    group_by(technology, metric) %>%
+    summarise(
+      n_curves = n(),
+      median_reads = median(estimated_reads, na.rm = TRUE),
+      median_reads_per_cell = median(reads_per_cell_converter(estimated_reads), na.rm = TRUE),
+      mean_cv = mean(cv, na.rm = TRUE),
+      .groups = 'drop'
+    ) %>%
+    arrange(metric, median_reads)
+  
+  # Sample type comparison
+  sample_comparison <- td_metrics_results %>%
+    group_by(sample_type, metric) %>%
+    summarise(
+      n_curves = n(),
+      median_reads = median(estimated_reads, na.rm = TRUE),
+      median_reads_per_cell = median(reads_per_cell_converter(estimated_reads), na.rm = TRUE),
+      mean_cv = mean(cv, na.rm = TRUE),
+      .groups = 'drop'
+    ) %>%
+    arrange(metric, median_reads)
+  
+  # Generate HTML content
+  html_content <- paste0('
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TD75/TD50 Metrics Analysis - ORACLE-seq</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            line-height: 1.6;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f8f9fa;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            margin: 0 0 10px 0;
+            font-size: 2.5em;
+            font-weight: 300;
+        }
+        
+        .header p {
+            margin: 0;
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+        
+        .summary-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .card {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border-left: 4px solid #667eea;
+        }
+        
+        .card h3 {
+            margin: 0 0 15px 0;
+            color: #333;
+            font-size: 1.3em;
+        }
+        
+        .metric-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #667eea;
+            margin: 10px 0;
+        }
+        
+        .metric-label {
+            color: #666;
+            font-size: 0.9em;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .section {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+        
+        .section h2 {
+            color: #333;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        th {
+            background-color: #f8f9fa;
+            font-weight: 600;
+            color: #333;
+            position: sticky;
+            top: 0;
+        }
+        
+        tr:hover {
+            background-color: #f8f9fa;
+        }
+        
+        .stability-high {
+            color: #28a745;
+            font-weight: bold;
+        }
+        
+        .stability-moderate {
+            color: #ffc107;
+            font-weight: bold;
+        }
+        
+        .stability-low {
+            color: #fd7e14;
+            font-weight: bold;
+        }
+        
+        .stability-very-low {
+            color: #dc3545;
+            font-weight: bold;
+        }
+        
+        .confidence-interval {
+            font-size: 0.9em;
+            color: #666;
+        }
+        
+        .methodology {
+            background: #e8f4fd;
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid #007bff;
+            margin: 20px 0;
+        }
+        
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+        }
+        
+        .alert-info {
+            background-color: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+        }
+        
+        .alert-warning {
+            background-color: #fff3cd;
+            border: 1px solid #ffeaa7;
+            color: #856404;
+        }
+        
+        .footer {
+            text-align: center;
+            margin-top: 50px;
+            padding: 20px;
+            color: #666;
+            font-size: 0.9em;
+        }
+        
+        @media (max-width: 768px) {
+            .summary-cards {
+                grid-template-columns: 1fr;
+            }
+            
+            table {
+                font-size: 0.9em;
+            }
+            
+            th, td {
+                padding: 8px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>TD75/TD50 Metrics Analysis</h1>
+        <p>Transcript Discovery Efficiency Assessment | Generated: ', Sys.time(), '</p>
+    </div>
+    
+    <div class="summary-cards">
+        <div class="card">
+            <h3>TD75 Median Depth</h3>
+            <div class="metric-value">', scales::comma(round(td_summary$median_reads[td_summary$metric == "TD75"])), '</div>
+            <div class="metric-label">Total Reads</div>
+            <p class="confidence-interval">75% of discovery ceiling</p>
+        </div>
+        
+        <div class="card">
+            <h3>TD50 Median Depth</h3>
+            <div class="metric-value">', scales::comma(round(td_summary$median_reads[td_summary$metric == "TD50"])), '</div>
+            <div class="metric-label">Total Reads</div>
+            <p class="confidence-interval">50% of discovery ceiling</p>
+        </div>
+        
+        <div class="card">
+            <h3>Analyzed Protocols</h3>
+            <div class="metric-value">', length(unique(td_metrics_results$curve_id)), '</div>
+            <div class="metric-label">Rarefaction Curves</div>
+            <p class="confidence-interval">', length(unique(td_metrics_results$technology)), ' technologies, ', length(unique(td_metrics_results$sample_type)), ' sample types</p>
+        </div>
+    </div>
+    
+    <div class="section">
+        <h2>📊 Methodology Overview</h2>
+        <div class="methodology">
+            <h4>TD75/TD50 Calculation Method</h4>
+            <ol>
+                <li><strong>Discovery Ceiling</strong>: Total features at 10 features/million reads threshold</li>
+                <li><strong>Target Calculation</strong>: TD75 = 75% of ceiling, TD50 = 50% of ceiling</li>
+                <li><strong>Depth Estimation</strong>: Inverse prediction using fitted rarefaction models</li>
+                <li><strong>Uncertainty Quantification</strong>: Bootstrap confidence intervals (', nrow(td_metrics_results), ' iterations)</li>
+            </ol>
+        </div>
+        
+        <div class="alert alert-info">
+            <strong>Interpretation Guide:</strong><br>
+            • <strong>TD75</strong>: Sequencing depth for substantial feature discovery (recommended for comprehensive studies)<br>
+            • <strong>TD50</strong>: Sequencing depth for moderate feature discovery (suitable for exploratory work)<br>
+            • <strong>Confidence Intervals</strong>: Reflect statistical uncertainty in depth predictions<br>
+            • <strong>Stability Ratings</strong>: Guide interpretation confidence (High/Moderate = reliable, Low/Very Low = interpret cautiously)
+        </div>
+    </div>
+    
+    <div class="section">
+        <h2>📈 Detailed Results</h2>
+        <p>Complete TD75/TD50 analysis for all protocols with confidence intervals and stability assessment.</p>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>Protocol</th>
+                    <th>Metric</th>
+                    <th>Target Features</th>
+                    <th>Estimated Reads</th>
+                    <th>Reads per Cell</th>
+                    <th>95% CI</th>
+                    <th>Stability</th>
+                    <th>Model</th>
+                </tr>
+            </thead>
+            <tbody>')
+  
+  # Add detailed results rows
+  for (i in 1:nrow(td_metrics_results)) {
+    row <- td_metrics_results[i, ]
+    stability_class <- paste0("stability-", tolower(str_replace_all(row$stability, " ", "-")))
+    ci_text <- if (!is.na(row$lower_ci) && !is.na(row$upper_ci)) {
+      paste0("[", scales::comma(round(row$lower_ci)), ", ", scales::comma(round(row$upper_ci)), "]")
+    } else {
+      "Not available"
+    }
+    
+    html_content <- paste0(html_content, '
+                <tr>
+                    <td>', clean_curve_name(row$curve_id), '</td>
+                    <td><strong>', row$metric, '</strong></td>
+                    <td>', scales::comma(round(row$target_features)), '</td>
+                    <td>', scales::comma(round(row$estimated_reads)), '</td>
+                    <td>', scales::comma(round(reads_per_cell_converter(row$estimated_reads))), '</td>
+                    <td class="confidence-interval">', ci_text, '</td>
+                    <td class="', stability_class, '">', row$stability, '</td>
+                    <td>', str_to_title(str_replace_all(row$model_type, "_", " ")), '</td>
+                </tr>')
+  }
+  
+  html_content <- paste0(html_content, '
+            </tbody>
+        </table>
+    </div>
+    
+    <div class="section">
+        <h2>🔬 Technology Comparison</h2>
+        <p>Median sequencing depth requirements by technology platform for efficient transcript discovery.</p>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>Technology</th>
+                    <th>Metric</th>
+                    <th>Protocols</th>
+                    <th>Median Total Reads</th>
+                    <th>Median Reads/Cell</th>
+                    <th>Avg Uncertainty (CV)</th>
+                </tr>
+            </thead>
+            <tbody>')
+  
+  # Add technology comparison rows
+  for (i in 1:nrow(tech_comparison)) {
+    row <- tech_comparison[i, ]
+    html_content <- paste0(html_content, '
+                <tr>
+                    <td><strong>', row$technology, '</strong></td>
+                    <td>', row$metric, '</td>
+                    <td>', row$n_curves, '</td>
+                    <td>', scales::comma(round(row$median_reads)), '</td>
+                    <td>', scales::comma(round(row$median_reads_per_cell)), '</td>
+                    <td>', sprintf("%.1f%%", row$mean_cv * 100), '</td>
+                </tr>')
+  }
+  
+  html_content <- paste0(html_content, '
+            </tbody>
+        </table>
+    </div>
+    
+    <div class="section">
+        <h2>🧬 Sample Type Analysis</h2>
+        <p>Sequencing depth recommendations by sample preparation method.</p>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>Sample Type</th>
+                    <th>Metric</th>
+                    <th>Protocols</th>
+                    <th>Median Total Reads</th>
+                    <th>Median Reads/Cell</th>
+                    <th>Avg Uncertainty (CV)</th>
+                </tr>
+            </thead>
+            <tbody>')
+  
+  # Add sample type comparison rows
+  for (i in 1:nrow(sample_comparison)) {
+    row <- sample_comparison[i, ]
+    sample_type_display <- case_when(
+      row$sample_type == "SC" ~ "Single-Cell",
+      row$sample_type == "SN" ~ "Single-Nucleus", 
+      TRUE ~ row$sample_type
+    )
+    
+    html_content <- paste0(html_content, '
+                <tr>
+                    <td><strong>', sample_type_display, '</strong></td>
+                    <td>', row$metric, '</td>
+                    <td>', row$n_curves, '</td>
+                    <td>', scales::comma(round(row$median_reads)), '</td>
+                    <td>', scales::comma(round(row$median_reads_per_cell)), '</td>
+                    <td>', sprintf("%.1f%%", row$mean_cv * 100), '</td>
+                </tr>')
+  }
+  
+  # Find most efficient protocols
+  most_efficient <- td_metrics_results %>%
+    group_by(metric) %>%
+    slice_min(estimated_reads, n = 3) %>%
+    ungroup()
+  
+  html_content <- paste0(html_content, '
+            </tbody>
+        </table>
+    </div>
+    
+    <div class="section">
+        <h2>🏆 Efficiency Rankings</h2>
+        <p>Most efficient protocols for transcript discovery (lowest sequencing depth required).</p>')
+  
+  for (metric_type in c("TD75", "TD50")) {
+    metric_efficient <- most_efficient %>% filter(metric == metric_type)
+    html_content <- paste0(html_content, '
+        <h4>', metric_type, ' - Most Efficient Protocols</h4>
+        <table>
+            <thead>
+                <tr>
+                    <th>Rank</th>
+                    <th>Protocol</th>
+                    <th>Estimated Reads</th>
+                    <th>Reads per Cell</th>
+                    <th>Confidence Interval</th>
+                    <th>Stability</th>
+                </tr>
+            </thead>
+            <tbody>')
+    
+    for (i in 1:nrow(metric_efficient)) {
+      row <- metric_efficient[i, ]
+      stability_class <- paste0("stability-", tolower(str_replace_all(row$stability, " ", "-")))
+      ci_text <- if (!is.na(row$lower_ci) && !is.na(row$upper_ci)) {
+        paste0("[", scales::comma(round(row$lower_ci)), ", ", scales::comma(round(row$upper_ci)), "]")
+      } else {
+        "Not available"
+      }
+      
+      html_content <- paste0(html_content, '
+                <tr>
+                    <td><strong>', i, '</strong></td>
+                    <td>', clean_curve_name(row$curve_id), '</td>
+                    <td>', scales::comma(round(row$estimated_reads)), '</td>
+                    <td>', scales::comma(round(reads_per_cell_converter(row$estimated_reads))), '</td>
+                    <td class="confidence-interval">', ci_text, '</td>
+                    <td class="', stability_class, '">', row$stability, '</td>
+                </tr>')
+    }
+    html_content <- paste0(html_content, '
+            </tbody>
+        </table>')
+  }
+  
+  html_content <- paste0(html_content, '
+    </div>
+    
+    <div class="section">
+        <h2>💡 Practical Recommendations</h2>
+        
+        <div class="alert alert-info">
+            <h4>Key Findings:</h4>
+            <ul>
+                <li><strong>Most Efficient TD75 Protocol</strong>: ', clean_curve_name(most_efficient$curve_id[most_efficient$metric == "TD75"][1]), ' (', scales::comma(round(most_efficient$estimated_reads[most_efficient$metric == "TD75"][1])), ' total reads)</li>
+                <li><strong>Most Efficient TD50 Protocol</strong>: ', clean_curve_name(most_efficient$curve_id[most_efficient$metric == "TD50"][1]), ' (', scales::comma(round(most_efficient$estimated_reads[most_efficient$metric == "TD50"][1])), ' total reads)</li>
+                <li><strong>Technology Recommendation</strong>: ', names(sort(table(most_efficient$technology), decreasing = TRUE))[1], ' shows consistently high efficiency</li>
+            </ul>
+        </div>
+        
+        <div class="alert alert-warning">
+            <h4>Important Considerations:</h4>
+            <ul>
+                <li>TD metrics are based on mathematical model extrapolation</li>
+                <li>Confidence intervals reflect statistical uncertainty in predictions</li>
+                <li>High/Moderate stability ratings indicate reliable predictions</li>
+                <li>Consider experimental costs vs. discovery benefits when choosing depths</li>
+                <li>TD75 provides substantial discovery coverage, TD50 offers cost-effective exploration</li>
+            </ul>
+        </div>
+    </div>
+    
+    <div class="footer">
+        <p>Generated by <strong>ORACLE-seq</strong> | TD75/TD50 Metrics Analysis<br>
+        Statistical Framework: 7-model competition with bootstrap uncertainty quantification<br>
+        Discovery Ceiling Methodology: Features at 10 f/M threshold</p>
+    </div>
+</body>
+</html>')
+  
+  # Write HTML file
+  writeLines(html_content, output_file)
+  cat("TD75/TD50 HTML report created:", output_file, "\n")
+}
+
 # Generate comprehensive model competition analysis report
 create_model_competition_analysis_report <- function(fitted_models, output_file) {
   cat("Generating model competition analysis report to:", output_file, "\n")
