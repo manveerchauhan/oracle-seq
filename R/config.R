@@ -13,7 +13,7 @@ BMA_MIN_MODELS <- 2           # Minimum number of models required for ensemble
 
 # Model types supported by ORACLE-seq
 MODEL_TYPES <- c("linear", "michaelis_menten", "asymptotic_exp", "power_law", 
-                 "logarithmic", "shifted_logarithmic", "hill")
+                 "logarithmic", "hill")
 
 # Color schemes for plots
 COLOR_SCHEMES <- list(

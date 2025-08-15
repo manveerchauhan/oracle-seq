@@ -153,27 +153,7 @@ run_rarefaction_analysis <- function() {
   save_plots(individual_plots, "individual_model_fits_total_reads.pdf", width = 10, height = 6)
   
   # Create reads per cell version
-  individual_plots_rpc <- lapply(names(individual_plots), function(curve_id) {
-    orig_plot <- individual_plots[[curve_id]]
-    orig_data <- rarefaction_data %>% filter(curve_id == !!curve_id) %>%
-      mutate(reads_per_cell = reads_per_cell_converter(total_reads_unified))
-    fitted_data <- fitted_curves %>% filter(curve_id == !!curve_id) %>%
-      mutate(reads_per_cell = reads_per_cell_converter(total_reads_unified))
-    
-    orig_plot %+% list(x = "reads_per_cell") +
-      geom_line(data = fitted_data, 
-                aes(x = reads_per_cell, y = featureNum_fitted),
-                color = orig_plot$layers[[1]]$aes_params$colour,
-                linetype = orig_plot$layers[[1]]$aes_params$linetype,
-                linewidth = 1.5, alpha = 0.8) +
-      geom_point(data = orig_data,
-                 aes(x = reads_per_cell, y = featureNum),
-                 color = orig_plot$layers[[2]]$aes_params$colour,
-                 shape = orig_plot$layers[[2]]$aes_params$shape,
-                 size = 3, alpha = 0.8) +
-      labs(x = "Estimated Median Reads per Cell")
-  })
-  names(individual_plots_rpc) <- names(individual_plots)
+  individual_plots_rpc <- create_individual_fit_plots_reads_per_cell(fitted_models_with_uncertainty, rarefaction_data, fitted_curves, reads_per_cell_converter)
   save_plots(individual_plots_rpc, "individual_model_fits_reads_per_cell.pdf", width = 10, height = 6)
   
   # 3. Extended saturation curves

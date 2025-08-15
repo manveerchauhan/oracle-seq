@@ -383,6 +383,12 @@ calculate_threshold_depth <- function(model_type, params, threshold) {
       a <- params[["a"]] %||% params[[1]]  # Scaling factor
       a * 1e6 / threshold
     },
+    shifted_logarithmic = {
+      # Shifted logarithmic: f'(x) = a / (x + c)
+      a <- params[["a"]] %||% params[[1]]  # Scaling factor
+      c <- params[["c"]] %||% params[[3]]  # Shift parameter
+      a * 1e6 / threshold - c
+    },
     hill = {
       # Hill equation: requires numerical solution
       # Delegate to specialized function
@@ -575,6 +581,12 @@ calculate_marginal_returns_simple <- function(model_result, x_eval = NULL) {
       a <- params[["a"]] %||% params[[1]]
       a / x_eval
     },
+    shifted_logarithmic = {
+      # Shifted logarithmic: f'(x) = a / (x + c)
+      a <- params[["a"]] %||% params[[1]]
+      c <- params[["c"]] %||% params[[3]]
+      a / (x_eval + c)
+    },
     hill = {
       # Hill: f'(x) = (a * n * b^n * x^(n-1)) / (b^n + x^n)²
       a <- params[["a"]] %||% params[[1]]
@@ -682,6 +694,12 @@ create_model_equations_report <- function(fitted_models, output_file) {
         a <- safe_param_get(params, "a", default = params[[1]])
         b <- safe_param_get(params, "b", default = params[[2]])
         sprintf("f(x) = %.4f * log(x) + %.4f", a, b)
+      },
+      "shifted_logarithmic" = {
+        a <- safe_param_get(params, "a", default = params[[1]])
+        b <- safe_param_get(params, "b", default = params[[2]])
+        c <- safe_param_get(params, "c", default = if(length(params) >= 3) params[[3]] else 1)
+        sprintf("f(x) = %.4f * log(x + %.4f) + %.4f", a, c, b)
       },
       "hill" = {
         a <- safe_param_get(params, "a", default = params[[1]])
@@ -832,6 +850,12 @@ create_model_equations_report <- function(fitted_models, output_file) {
         b <- safe_param_get(params, "b", default = params[[2]])
         sprintf("f(x) = %.4f * log(x) + %.4f", a, b)
       },
+      "shifted_logarithmic" = {
+        a <- safe_param_get(params, "a", default = params[[1]])
+        b <- safe_param_get(params, "b", default = params[[2]])
+        c <- safe_param_get(params, "c", default = params[[3]])
+        sprintf("f(x) = %.4f * log(x + %.4f) + %.4f", a, c, b)
+      },
       "hill" = {
         a <- safe_param_get(params, "a", default = params[[1]])
         b <- safe_param_get(params, "b", default = params[[2]])
@@ -866,6 +890,11 @@ create_model_equations_report <- function(fitted_models, output_file) {
       "logarithmic" = {
         paste("  a (scaling):", sprintf("%.4f", safe_param_get(params, "a", default = params[[1]])), "logarithmic scaling",
               "\n  b (baseline):", sprintf("%.4f", safe_param_get(params, "b", default = params[[2]])), "baseline features")
+      },
+      "shifted_logarithmic" = {
+        paste("  a (scaling):", sprintf("%.4f", safe_param_get(params, "a", default = params[[1]])), "logarithmic scaling",
+              "\n  b (baseline):", sprintf("%.4f", safe_param_get(params, "b", default = params[[2]])), "baseline features",
+              "\n  c (shift):", sprintf("%.4f", safe_param_get(params, "c", default = params[[3]])), "x-axis shift parameter")
       },
       "hill" = {
         paste("  a (Bmax):", sprintf("%.4f", safe_param_get(params, "a", default = params[[1]])), "maximum features",

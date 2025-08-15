@@ -150,6 +150,56 @@ create_individual_fit_plots <- function(fitted_models, rarefaction_data, fitted_
   return(plot_list)
 }
 
+# Create individual model fit plots with reads per cell on x-axis
+create_individual_fit_plots_reads_per_cell <- function(fitted_models, rarefaction_data, fitted_curves, reads_per_cell_converter) {
+  plot_list <- list()
+  
+  for (i in 1:nrow(fitted_models)) {
+    curve_id <- fitted_models$curve_id[i]
+    model_result <- fitted_models$fitted_model[[i]]
+    
+    if (!model_result$convergence) next
+    
+    # Get data and convert to reads per cell
+    orig_data <- rarefaction_data %>% 
+      filter(curve_id == !!curve_id) %>%
+      mutate(reads_per_cell = reads_per_cell_converter(total_reads_unified))
+    
+    fitted_data <- fitted_curves %>% 
+      filter(curve_id == !!curve_id) %>%
+      mutate(reads_per_cell = reads_per_cell_converter(total_reads_unified))
+    
+    # Extract metadata
+    technology <- str_extract(curve_id, "^[^_]+")
+    sample_type <- str_extract(curve_id, "(?<=_)[^_]+(?=_)")
+    feature_type <- str_extract(curve_id, "[^_]+$")
+    
+    # Create plot
+    p <- ggplot() +
+      geom_line(data = fitted_data, 
+                aes(x = reads_per_cell, y = featureNum_fitted),
+                color = get_color_map()[technology], 
+                linetype = LINETYPE_MAP[sample_type],
+                linewidth = 1.5, alpha = 0.8) +
+      geom_point(data = orig_data,
+                 aes(x = reads_per_cell, y = featureNum),
+                 color = get_color_map()[technology], 
+                 shape = SHAPE_MAP[sample_type],
+                 size = 3, alpha = 0.8) +
+      labs(title = paste(technology, sample_type, feature_type),
+           subtitle = paste("Model:", model_result$model, "| R² =", round(model_result$r_squared, 3)),
+           x = "Estimated Median Reads per Cell",
+           y = "Number of Features Detected") +
+      theme_minimal() +
+      scale_x_continuous(labels = scales::comma) +
+      scale_y_continuous(labels = scales::comma)
+    
+    plot_list[[curve_id]] <- p
+  }
+  
+  return(plot_list)
+}
+
 # Create threshold bar plots
 create_threshold_bar_plots <- function(marginal_returns_results) {
   plot_list <- list()
@@ -270,7 +320,6 @@ create_extended_saturation_plots <- function(fitted_models, rarefaction_data, ma
       model_result$model == "asymptotic_exp" ~ "Asymptotic Exponential",
       model_result$model == "power_law" ~ "Power Law",
       model_result$model == "logarithmic" ~ "Logarithmic",
-      model_result$model == "shifted_logarithmic" ~ "Shifted Logarithmic",
       model_result$model == "hill" ~ "Hill Equation",
       TRUE ~ model_result$model
     )

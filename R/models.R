@@ -135,16 +135,6 @@ generate_starting_values <- function(x, y, model_type) {
         data_driven = list(a = (max_y - min_y) / log_range, b = min_y)
       )
     },
-    shifted_logarithmic = {
-      # For shifted logarithmic: y = a*log(x + c) + b
-      # 'c' parameter handles x values near zero
-      # Conservative: small shift, optimistic: larger shift
-      list(
-        conservative = list(a = range_y / log(max_x), b = min_y, c = 1),
-        optimistic = list(a = range_y / log(max_x + min_x), b = min_y, c = min_x),
-        data_driven = list(a = range_y / log(max_x), b = y[1], c = 0.1)
-      )
-    },
     hill = {
       # For Hill equation: y = (a*x^n)/(b^n + x^n)
       # 'a' = maximum binding, 'b' = half-saturation, 'n' = Hill coefficient
@@ -184,7 +174,6 @@ get_model_formula <- function(model_type) {
     asymptotic_exp = y ~ a * (1 - exp(-b * x)),
     power_law = y ~ a * x^b,
     logarithmic = y ~ a * log(x) + b,
-    shifted_logarithmic = y ~ a * log(x + c) + b,
     hill = y ~ (a * x^n) / (b^n + x^n)
   )
   return(formulas[[model_type]])
@@ -1126,6 +1115,20 @@ determine_ensemble_eligibility <- function(competition_analysis) {
 #' cat("Ensemble 95% CI:", ensemble_uncertainty$ensemble_ci)
 #' cat("Model Weight CV:", ensemble_uncertainty$weight_uncertainty)
 bootstrap_ensemble_uncertainty <- function(curve_data, all_fitted_models, competitive_model_names, threshold, n_boot = BMA_BOOTSTRAP_SAMPLES) {
+  # Validate required constants exist
+  if (!exists("CONFIDENCE_LEVEL") || is.null(CONFIDENCE_LEVEL)) {
+    stop("CONFIDENCE_LEVEL not defined")
+  }
+  if (!exists("BMA_MIN_MODELS") || is.null(BMA_MIN_MODELS)) {
+    stop("BMA_MIN_MODELS not defined")
+  }
+  
+  cat("    DEBUG: Starting bootstrap_ensemble_uncertainty\n")
+  cat("      curve_data dims:", dim(curve_data), "\n")
+  cat("      competitive_model_names:", competitive_model_names, "\n")
+  cat("      threshold:", threshold, "\n")
+  cat("      n_boot:", n_boot, "\n")
+  
   original_data <- curve_data
   x_orig <- original_data$total_reads_unified
   y_orig <- original_data$featureNum
@@ -1203,6 +1206,15 @@ bootstrap_ensemble_uncertainty <- function(curve_data, all_fitted_models, compet
           # Calculate weighted ensemble prediction
           ensemble_predictions[i] <- sum(boot_akaike_weights * boot_predictions)
           
+          # Debug extreme values
+          if (is.infinite(ensemble_predictions[i]) || ensemble_predictions[i] > 1e50) {
+            cat("    DEBUG: Extreme value detected at iteration", i, "\n")
+            cat("      ensemble_predictions[i]:", ensemble_predictions[i], "\n")
+            cat("      boot_akaike_weights:", boot_akaike_weights, "\n")
+            cat("      boot_predictions:", boot_predictions, "\n")
+            cat("      boot_converged models:", boot_converged, "\n")
+          }
+          
           # Store weights (fill with 0 for missing models)
           for (model_name in competitive_model_names) {
             if (model_name %in% boot_converged) {
@@ -1228,8 +1240,27 @@ bootstrap_ensemble_uncertainty <- function(curve_data, all_fitted_models, compet
   }
   
   # Filter out failed iterations
+  cat("    DEBUG: Pre-filtering array info:\n")
+  cat("      ensemble_predictions length:", length(ensemble_predictions), "\n")
+  cat("      ensemble_predictions range:", range(ensemble_predictions, na.rm = TRUE), "\n")
+  cat("      model_weights_matrix dims:", dim(model_weights_matrix), "\n")
+  cat("      valid_iterations:", valid_iterations, "\n")
+  
+  # Check for extreme values before filtering
+  extreme_values <- sum(is.infinite(ensemble_predictions) | ensemble_predictions > 1e50, na.rm = TRUE)
+  if (extreme_values > 0) {
+    cat("      WARNING: Found", extreme_values, "extreme/infinite values in ensemble_predictions\n")
+  }
+  
   valid_predictions <- ensemble_predictions[ensemble_predictions > 0 & is.finite(ensemble_predictions)]
   valid_weights <- model_weights_matrix[complete.cases(model_weights_matrix), , drop = FALSE]
+  
+  cat("    DEBUG: Post-filtering array info:\n")
+  cat("      valid_predictions length:", length(valid_predictions), "\n")
+  if (length(valid_predictions) > 0) {
+    cat("      valid_predictions range:", range(valid_predictions, na.rm = TRUE), "\n")
+  }
+  cat("      valid_weights dims:", dim(valid_weights), "\n")
   
   if (length(valid_predictions) < 10) {
     cat("    WARNING: Only", length(valid_predictions), "successful ensemble bootstrap iterations\n")
@@ -1248,34 +1279,109 @@ bootstrap_ensemble_uncertainty <- function(curve_data, all_fitted_models, compet
   
   # Calculate ensemble statistics
   alpha <- 1 - CONFIDENCE_LEVEL
-  ensemble_ci <- quantile(valid_predictions, c(alpha/2, 1 - alpha/2), na.rm = TRUE)
+  cat("    DEBUG: About to calculate ensemble statistics\n")
+  cat("      alpha:", alpha, "\n")
+  cat("      CONFIDENCE_LEVEL:", CONFIDENCE_LEVEL, "\n")
+  
+  tryCatch({
+    ensemble_ci <- quantile(valid_predictions, c(alpha/2, 1 - alpha/2), na.rm = TRUE)
+    cat("      ensemble_ci calculated successfully\n")
+  }, error = function(e) {
+    cat("      ERROR in quantile calculation:", e$message, "\n")
+    stop("Quantile calculation failed: ", e$message)
+  })
+  
   ensemble_mean <- mean(valid_predictions, na.rm = TRUE)
   ensemble_sd <- sd(valid_predictions, na.rm = TRUE)
   
+  cat("    DEBUG: About to calculate model weight statistics\n")
+  cat("      valid_weights dims:", dim(valid_weights), "\n")
+  cat("      valid_weights colnames:", colnames(valid_weights), "\n")
+  
   # Calculate model weight statistics
-  weight_means <- apply(valid_weights, 2, mean, na.rm = TRUE)
-  weight_sds <- apply(valid_weights, 2, sd, na.rm = TRUE)
+  tryCatch({
+    weight_means <- apply(valid_weights, 2, mean, na.rm = TRUE)
+    cat("      weight_means calculated successfully\n")
+  }, error = function(e) {
+    cat("      ERROR in weight_means calculation:", e$message, "\n")
+    stop("Weight means calculation failed: ", e$message)
+  })
+  
+  tryCatch({
+    weight_sds <- apply(valid_weights, 2, sd, na.rm = TRUE)
+    cat("      weight_sds calculated successfully\n")
+  }, error = function(e) {
+    cat("      ERROR in weight_sds calculation:", e$message, "\n")
+    stop("Weight sds calculation failed: ", e$message)
+  })
+  
   weight_cvs <- weight_sds / weight_means
   weight_cvs[is.na(weight_cvs) | is.infinite(weight_cvs)] <- 0
   
   # Calculate model uncertainty (between-model variance component)
   # This captures how much predictions vary due to model uncertainty
-  original_weights <- weight_means / sum(weight_means)  # Normalize
-  original_predictions <- sapply(competitive_model_names, function(model_name) {
-    if (model_name %in% names(all_fitted_models) && all_fitted_models[[model_name]]$convergence) {
-      model_fit <- all_fitted_models[[model_name]]
-      if (model_name == "hill") {
-        depth <- calculate_hill_threshold(model_fit, coef(model_fit$fit_object), threshold)
+  cat("    DEBUG: Starting model uncertainty calculation...\n")
+  cat("      competitive_model_names:", competitive_model_names, "\n")
+  cat("      all_fitted_models names:", names(all_fitted_models), "\n")
+  
+  tryCatch({
+    original_predictions <- sapply(competitive_model_names, function(model_name) {
+      cat("      Processing model:", model_name, "\n")
+      
+      if (model_name %in% names(all_fitted_models) && all_fitted_models[[model_name]]$convergence) {
+        cat("        Model exists and converged\n")
+        model_fit <- all_fitted_models[[model_name]]
+        
+        # Safely extract parameters and calculate threshold
+        tryCatch({
+          # DEBUG: Check model fit structure
+          cat("        fit_object class:", class(model_fit$fit_object), "\n")
+          
+          # DEBUG: Check parameter extraction
+          coef_values <- coef(model_fit$fit_object)
+          cat("        coef_values:", coef_values, "\n")
+          cat("        coef_values length:", length(coef_values), "\n")
+          cat("        coef_values names:", names(coef_values), "\n")
+          
+          # DEBUG: Before threshold calculation
+          cat("        About to calculate threshold for", model_name, "\n")
+          
+          if (model_name == "hill") {
+            depth <- calculate_hill_threshold(model_fit, coef_values, threshold)
+          } else {
+            depth <- calculate_threshold_depth(model_name, coef_values, threshold)
+          }
+          
+          cat("        Threshold calculated:", depth, "\n")
+          return(ifelse(is.na(depth) || depth <= 0 || !is.finite(depth), NA, depth))
+          
+        }, error = function(e) {
+          cat("        ERROR: Failed to process model", model_name, "\n")
+          cat("        Error message:", e$message, "\n")
+          return(NA)
+        })
       } else {
-        depth <- calculate_threshold_depth(model_name, coef(model_fit$fit_object), threshold)
+        cat("        Model missing or failed to converge\n")
+        return(NA)
       }
-      return(ifelse(is.na(depth) || depth <= 0 || !is.finite(depth), NA, depth))
-    } else {
-      return(NA)
-    }
+    })
+    
+    cat("      ✓ original_predictions calculated successfully\n")
+    cat("      original_predictions:", original_predictions, "\n")
+    
+  }, error = function(e) {
+    cat("      ERROR in model uncertainty calculation:", e$message, "\n")
+    cat("      Setting original_predictions to all NAs\n")
+    original_predictions <<- rep(NA, length(competitive_model_names))
+    names(original_predictions) <<- competitive_model_names
   })
   
+  cat("    DEBUG: Model uncertainty calculation completed\n")
+  
+  # Complete the model uncertainty calculation
+  original_weights <- weight_means / sum(weight_means)  # Normalize
   valid_original <- !is.na(original_predictions)
+  
   if (sum(valid_original) >= 2) {
     weighted_mean_pred <- sum(original_weights[valid_original] * original_predictions[valid_original])
     model_uncertainty <- sqrt(sum(original_weights[valid_original] * (original_predictions[valid_original] - weighted_mean_pred)^2))
@@ -1423,31 +1529,111 @@ create_ensemble_predictions <- function(fitted_model_result, thresholds = MARGIN
     cat("  Running ensemble analysis for", thresh, "f/M threshold...\n")
     
     # Run bootstrap ensemble uncertainty
-    ensemble_result <- bootstrap_ensemble_uncertainty(
-      curve_data = curve_data,
-      all_fitted_models = fitted_model_result$all_models,
-      competitive_model_names = eligibility$eligible_models,
-      threshold = thresh,
-      n_boot = BMA_BOOTSTRAP_SAMPLES
-    )
+    tryCatch({
+      ensemble_result <- bootstrap_ensemble_uncertainty(
+        curve_data = curve_data,
+        all_fitted_models = fitted_model_result$all_models,
+        competitive_model_names = eligibility$eligible_models,
+        threshold = thresh,
+        n_boot = BMA_BOOTSTRAP_SAMPLES
+      )
+    }, error = function(e) {
+      cat("ERROR: bootstrap_ensemble_uncertainty failed\n")
+      cat("  Curve:", fitted_model_result$curve_name, "\n")
+      cat("  Threshold:", thresh, "f/M\n")
+      cat("  Competitive models:", paste(eligibility$eligible_models, collapse = ", "), "\n")
+      cat("  Error message:", e$message, "\n")
+      cat("  Call stack:\n")
+      traceback()
+      stop("Ensemble bootstrap failed for ", fitted_model_result$curve_name, " at ", thresh, " f/M: ", e$message)
+    })
     
-    if (!is.na(ensemble_result$ensemble_mean)) {
-      single_model_results$bma_depth[i] <- ensemble_result$ensemble_mean
-      single_model_results$model_uncertainty[i] <- ensemble_result$model_uncertainty
-      single_model_results$total_uncertainty[i] <- ensemble_result$total_uncertainty
-      single_model_results$robustness_score[i] <- ensemble_result$robustness_score
-      
-      # Calculate BMA features at predicted depth
-      bma_features <- predict(fitted_model_result$fit_object, 
-                             newdata = data.frame(x = ensemble_result$ensemble_mean))
-      single_model_results$bma_features[i] <- as.numeric(bma_features)
-      
-      # Update ensemble weights with bootstrap-averaged weights
-      if (!is.null(ensemble_result$weight_means)) {
-        weight_strings <- paste(round(ensemble_result$weight_means, 3), collapse = "|")
-        single_model_results$ensemble_weights[i] <- weight_strings
+    # DEBUG: Check ensemble_result structure
+    cat("    DEBUG: ensemble_result structure:\n")
+    cat("      class:", class(ensemble_result), "\n")
+    cat("      names:", names(ensemble_result), "\n")
+    
+    # DEBUG: Check each component before accessing
+    tryCatch({
+      cat("      ensemble_mean exists:", "ensemble_mean" %in% names(ensemble_result), "\n")
+      if ("ensemble_mean" %in% names(ensemble_result)) {
+        cat("      ensemble_mean value:", ensemble_result$ensemble_mean, "\n")
+        cat("      ensemble_mean is.na:", is.na(ensemble_result$ensemble_mean), "\n")
       }
-    }
+    }, error = function(e) {
+      cat("      ERROR accessing ensemble_mean:", e$message, "\n")
+    })
+    
+    # DEBUG: Check array dimensions before assignment
+    cat("      single_model_results dims:", dim(single_model_results), "\n")
+    cat("      current index i:", i, "\n")
+    cat("      nrow(single_model_results):", nrow(single_model_results), "\n")
+    
+    tryCatch({
+      if (!is.na(ensemble_result$ensemble_mean)) {
+        cat("    DEBUG: Starting result assignment...\n")
+        
+        # DEBUG: Check bma_depth column exists and has correct length
+        cat("      bma_depth column exists:", "bma_depth" %in% names(single_model_results), "\n")
+        cat("      bma_depth length:", length(single_model_results$bma_depth), "\n")
+        
+        cat("      Assigning ensemble_mean to bma_depth[", i, "]...\n")
+        single_model_results$bma_depth[i] <- ensemble_result$ensemble_mean
+        cat("      ✓ bma_depth assigned successfully\n")
+        
+        cat("      Assigning model_uncertainty to index", i, "...\n")
+        single_model_results$model_uncertainty[i] <- ensemble_result$model_uncertainty
+        cat("      ✓ model_uncertainty assigned successfully\n")
+        
+        cat("      Assigning total_uncertainty to index", i, "...\n")
+        single_model_results$total_uncertainty[i] <- ensemble_result$total_uncertainty
+        cat("      ✓ total_uncertainty assigned successfully\n")
+        
+        cat("      Assigning robustness_score to index", i, "...\n")
+        single_model_results$robustness_score[i] <- ensemble_result$robustness_score
+        cat("      ✓ robustness_score assigned successfully\n")
+        
+        # Calculate BMA features at predicted depth
+        cat("      About to predict BMA features...\n")
+        cat("      fitted_model_result$fit_object class:", class(fitted_model_result$fit_object), "\n")
+        cat("      ensemble_mean for prediction:", ensemble_result$ensemble_mean, "\n")
+        
+        bma_features <- predict(fitted_model_result$fit_object, 
+                               newdata = data.frame(x = ensemble_result$ensemble_mean))
+        cat("      ✓ predict() completed successfully\n")
+        cat("      bma_features value:", bma_features, "\n")
+        
+        cat("      Assigning bma_features to index", i, "...\n")
+        single_model_results$bma_features[i] <- as.numeric(bma_features)
+        cat("      ✓ bma_features assigned successfully\n")
+        
+        # Update ensemble weights with bootstrap-averaged weights
+        cat("      Checking weight_means...\n")
+        if (!is.null(ensemble_result$weight_means)) {
+          cat("      weight_means length:", length(ensemble_result$weight_means), "\n")
+          cat("      weight_means values:", ensemble_result$weight_means, "\n")
+          
+          weight_strings <- paste(round(ensemble_result$weight_means, 3), collapse = "|")
+          cat("      weight_strings created:", weight_strings, "\n")
+          
+          cat("      Assigning ensemble_weights to index", i, "...\n")
+          single_model_results$ensemble_weights[i] <- weight_strings
+          cat("      ✓ ensemble_weights assigned successfully\n")
+        } else {
+          cat("      weight_means is NULL, skipping weight assignment\n")
+        }
+        
+        cat("    DEBUG: All assignments completed successfully for index", i, "\n")
+      } else {
+        cat("    DEBUG: ensemble_mean is NA, skipping assignments\n")
+      }
+    }, error = function(e) {
+      cat("    ERROR during result assignment at index", i, ":\n")
+      cat("      Error message:", e$message, "\n")
+      cat("      Call stack:\n")
+      traceback()
+      stop("Result assignment failed at index ", i, ": ", e$message)
+    })
   }
   
   cat("  BMA analysis complete\n")
