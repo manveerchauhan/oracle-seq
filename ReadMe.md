@@ -2,7 +2,7 @@
 
 **Optimal Rarefaction Analysis with Confidence Level Estimation**
 
-🧬 **What it does:** Statistically models feature discovery in long-read RNA-seq data to optimize your sequencing strategy
+🧬 **What it does:** Statistically models feature (isoform/gene) discovery in long-read RNA-seq data to optimize your sequencing strategy
 
 📊 **Input:** Your rarefaction curve data (reads vs features discovered)  
 📈 **Output:** Statistical models with confidence intervals + sequencing recommendations
