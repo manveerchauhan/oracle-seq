@@ -1,130 +1,280 @@
-# ORACLE-seq: Optimal Rarefaction Analysis with Confidence Level Estimation
+# ORACLE-seq
 
-## Overview
+**Optimal Rarefaction Analysis with Confidence Level Estimation**
 
-ORACLE-seq is a statistically rigorous R pipeline for **flexible discovery modelling** and **experimental design optimisation** in long-read RNA-sequencing datasets. By modelling the discovery curves of any filtered feature set from your count matrix, ORACLE-seq helps you make informed decisions about current data quality and future sequencing investments.
+🧬 **What it does:** Statistically models feature (isoform/gene) discovery in long-read RNA-seq data to optimize your sequencing strategy
 
-## Core Concept
+📊 **Input:** Your rarefaction curve data (reads vs features discovered)  
+📈 **Output:** Statistical models with confidence intervals + sequencing recommendations
 
-**Input**: x,y coordinates (reads vs. features discovered) from any rarefaction analysis  
-**Output**: Statistical models with confidence intervals and optimal sequencing recommendations  
-**Power**: What you choose to "count" as a "feature" is completely up to your biological question
-
-The tool's flexibility depends on how creative you are as a bioinformatician to ask different biological questions of interest for you to make decisions on with a statistically rigorous method.
-
-## Key Features
-
-- **7-Model Competition**: Linear, Michaelis-Menten, Asymptotic Exponential, Power Law, Logarithmic, Shifted Logarithmic, and Hill models compete via Bayesian Model Averaging
-- **Bootstrap Uncertainty Quantification**: 1000+ iterations with confidence intervals
-- **Model Stability Assessment**: Coefficient of variation (CV) from bootstrap predictions categorises extrapolation confidence (High: <5% CV, Moderate: <15% CV, Low: <30% CV, Very Low: ≥30% CV)
-- **Configurable Thresholds**: Marginal returns analysis at multiple discovery rates
-- **Publication-Ready Outputs**: Comprehensive statistical analysis and visualisations
-- **Long-Read Optimised**: Designed for ONT/PacBio scRNA-seq, snRNA-seq, bulk RNA-seq, and direct RNA-seq
-
-## Use Cases & Applications
-
-### Data Quality Assessment
-*"How much of your count matrix discovery is dominated by internal priming artifacts vs genuine intron retention events (if that's of interest to your experiment). Create separate rarefaction curves for each annotation category and model their discovery rates to quantify the relative contribution of artifacts vs genuine events"*
-
-ORACLE-seq provides quantitative data quality insights by:
-- **Comparative discovery modelling**: Separate statistical models for artifact vs genuine feature discovery curves reveal which dominates at different sequencing depths
-- **Plateau analysis**: Determine if artifact discovery saturates early while genuine events continue accumulating, indicating data quality vs biological signal
-- **Proportional assessment**: Calculate the statistical ratio of artifact to genuine feature discovery with confidence intervals
-- **Depth-dependent quality metrics**: Understand how data quality changes with sequencing depth to optimise filtering strategies
-
-### Experimental Design Optimisation  
-*"If I were to sequence a couple million more reads or reach some discovery threshold would that be worth it?"*
-
-ORACLE-seq provides statistically-backed answers by:
-- **Extrapolating beyond current data**: Models predict feature discovery at higher sequencing depths with confidence intervals
-- **Quantifying marginal returns**: Calculates how many new features you'd discover per additional million reads at configurable thresholds (e.g., 10, 1, 0.1 features/million reads)
-- **Assessing prediction reliability**: Model stability indicators tell you how much confidence to place in extrapolation estimates
-- **Cost-benefit analysis**: Compare predicted discovery gains against sequencing costs to optimise experimental budgets
-
-### Flexible Discovery Modelling
-Model the discovery of any annotated feature set:
-- Differentially expressed genes
-- Novel isoforms 
-- Intron retention events
-- Technical artifacts
-- Splice junctions
-- Cell type markers
-- ...or any custom annotation strategy
-
-## Technical Approach
-
-**Statistical Rigour**: Multiple mathematical models compete to best describe your discovery curve, with model selection via AIC and uncertainty quantification through bootstrapping.
-
-**Model Competition**: Seven mathematical models simultaneously fit your data, with Bayesian Model Averaging providing robust predictions that account for model uncertainty.
-
-**Confidence Estimation**: Bootstrap resampling (1000+ iterations) generates confidence intervals around predictions, giving you statistical backing for experimental design decisions.
-
-**Model Stability Proxy**: Coefficient of variation (CV = standard deviation / mean) from bootstrap predictions quantifies how much "stake" you should put in the model's extrapolation at each threshold. Lower CV indicates more reliable extrapolation confidence.
-
-## Target Data Types
-
-- **Single-cell RNA-seq** (scRNA-seq)
-- **Single-nucleus RNA-seq** (snRNA-seq) 
-- **Bulk RNA-seq**
-- **Direct RNA-seq**
-- **Long-read sequencing platforms**: Oxford Nanopore (ONT), PacBio
-
-## Integration & Workflow
-
-ORACLE-seq integrates into custom analysis pipelines as a discovery modelling engine. You're limited only by your creativity in annotating transcripts and genes in a count matrix - then modelling the discovery of whatever you've annotated and filtered prior to inputting those x,y rarefied values into ORACLE-seq.
-
-## Quick Start
+## Quick Example
 
 ```r
+# 1. Install (one time)
 source("run_oracle_seq.R")
 
+# 2. Run analysis
 run_oracle_seq(
-  data_file = "rarefaction_results.rds",
-  analysis_name = "intron_retention_discovery", 
-  output_dir = "oracle_results",
-  thresholds = c(10, 1, 0.1),
-  bootstrap_samples = 1000,
-  use_bayesian_model_averaging = TRUE,
-  confidence_level = 0.95
+  data_file = "my_rarefaction_data.rds",
+  analysis_name = "my_study", 
+  output_dir = "results"
 )
+
+# 3. Check results in: results/my_study/
 ```
 
-## Input Data Requirements
+**What you get:**
+- 📊 Statistical models of your discovery curves
+- 📈 Extrapolation predictions with confidence intervals  
+- 💰 Cost-benefit analysis for additional sequencing
+- 📋 Publication-ready reports and plots
 
-**File Format**: RDS file containing a data frame
+---
 
-**Required Columns**:
-- `curve_id`: Character/factor identifying each experimental condition or sample
-- `total_reads_unified`: Numeric vector of total sequencing reads (x-axis values)  
-- `featureNum`: Numeric vector of features discovered at each depth (y-axis values)
+## Installation
 
-**Example Data Structure**:
+**Requirements:** R (≥4.0.0)
+
+**Auto-install:** ORACLE-seq automatically installs missing dependencies:
+- tidyverse, broom, patchwork, minpack.lm, scales, parallel, ggrepel, tidytext
+
+**Setup:**
+```bash
+git clone https://github.com/your-username/oracle-seq.git
+cd oracle-seq
+```
+
+---
+
+## Supported Data Types
+
+✅ **Single-cell RNA-seq** (scRNA-seq)  
+✅ **Single-nucleus RNA-seq** (snRNA-seq)  
+✅ **Bulk RNA-seq**  
+✅ **Direct RNA-seq**  
+
+**Platforms:** Oxford Nanopore (ONT), PacBio
+
+---
+
+## Input Data Format
+
+**File type:** RDS file with a data frame
+
+**Required columns:**
+- `curve_id`: Experiment/condition identifier  
+- `total_reads_unified`: Total sequencing reads (x-axis)
+- `featureNum`: Features discovered at that depth (y-axis)
+
+### Realistic Example Input
+
 ```r
-# Example rarefaction data frame
-data.frame(
-  curve_id = c("bulk_RNA_seq", "bulk_RNA_seq", "scRNA_seq", "scRNA_seq"),
-  total_reads_unified = c(1000000, 5000000, 500000, 2000000),
-  featureNum = c(15000, 18000, 8000, 12000)
+# Example: Longbench-style multi-protocol comparison
+# Each curve needs multiple points (10-20+ recommended) for good model fitting
+
+rarefaction_data <- data.frame(
+  curve_id = rep(c(
+    "ONT_Bulk_Genes_Discovery",
+    "ONT_SC_Genes_Discovery", 
+    "PacBio_Bulk_Genes_Discovery",
+    "PacBio_SC_Genes_Discovery"
+  ), each = 15),
+  
+  total_reads_unified = rep(c(
+    # Rarefaction depths (15 points per curve)
+    50000, 100000, 250000, 500000, 750000, 
+    1000000, 1500000, 2000000, 3000000, 4000000,
+    5000000, 7500000, 10000000, 15000000, 20000000
+  ), 4),
+  
+  featureNum = c(
+    # ONT Bulk Genes (typical saturation curve)
+    8500, 12000, 16500, 19000, 20500,
+    21500, 22000, 22300, 22600, 22800,
+    22900, 22980, 23000, 23020, 23030,
+    
+    # ONT SC Genes (lower saturation due to dropout)
+    5000, 8000, 12000, 15000, 17000,
+    18500, 19500, 20000, 20300, 20500,
+    20650, 20750, 20800, 20830, 20850,
+    
+    # PacBio Bulk Genes (higher saturation, cleaner data)
+    9000, 13000, 18000, 21000, 23000,
+    24500, 25500, 26000, 26400, 26600,
+    26750, 26850, 26900, 26930, 26950,
+    
+    # PacBio SC Genes (better than ONT SC)
+    6000, 9500, 14000, 17500, 19500,
+    21000, 22000, 22500, 22800, 22950,
+    23050, 23120, 23150, 23170, 23180
+  )
 )
 
-# Save as RDS for ORACLE-seq input
-saveRDS(rarefaction_data, "my_rarefaction_data.rds")
+# Save for ORACLE-seq
+saveRDS(rarefaction_data, "longbench_rarefaction_data.rds")
+
+# Check structure
+str(rarefaction_data)
+head(rarefaction_data, 10)
 ```
 
-**Data Quality Requirements**:
-- Minimum 3 data points per `curve_id` for model fitting
-- Non-negative values for both depth and feature counts
-- Sufficient range in x-values (depth) for meaningful model fitting
-- Generally increasing trend (more reads → more features discovered)
+### Quick Data Generation Template
 
-**Preprocessing Notes**:
-- Multiple curves can be analyzed simultaneously by using different `curve_id` values
-- Feature filtering strategy determines what biological question you're modelling
+```r
+# Template for creating your own rarefaction data
+create_rarefaction_example <- function() {
+  
+  # Define your experimental conditions
+  conditions <- c("Protocol_A_Genes", "Protocol_B_Genes", "Protocol_A_Isoforms")
+  
+  # Define rarefaction depths (customize as needed)
+  depths <- c(1e4, 5e4, 1e5, 2.5e5, 5e5, 1e6, 2e6, 5e6, 1e7, 2e7)
+  
+  # Create empty data frame
+  data_list <- list()
+  
+  for (condition in conditions) {
+    for (i in seq_along(depths)) {
+      data_list[[length(data_list) + 1]] <- data.frame(
+        curve_id = condition,
+        total_reads_unified = depths[i],
+        featureNum = YOUR_RAREFACTION_FUNCTION(depths[i], condition)
+      )
+    }
+  }
+  
+  rarefaction_data <- do.call(rbind, data_list)
+  saveRDS(rarefaction_data, "my_rarefaction_data.rds")
+  return(rarefaction_data)
+}
+```
+
+**Minimum requirements:**
+- ≥3 data points per curve_id (10-20+ recommended)
+- Non-negative values
+- Generally increasing trend (more reads → more features)
+
+---
+
+## Core Features
+
+### 🎯 **Smart Model Selection**
+- **7 competing models:** Linear, Michaelis-Menten, Asymptotic Exponential, Power Law, Logarithmic, Shifted Logarithmic, Hill
+- **Automatic best-fit selection** via AIC comparison
+- **Bayesian Model Averaging** for robust predictions
+
+### 📊 **Statistical Rigor**  
+- **1000+ bootstrap iterations** for confidence intervals
+- **Model stability assessment** with confidence categorization:
+  - 🟢 **High confidence:** <5% CV  
+  - 🟡 **Moderate confidence:** <15% CV
+  - 🟠 **Low confidence:** <30% CV
+  - 🔴 **Very low confidence:** ≥30% CV
+
+### 💡 **Practical Insights**
+- **Marginal returns analysis:** How many new features per million additional reads?
+- **Optimal sequencing depth** recommendations
+- **Cost-benefit analysis** for experimental design
+
+---
+
+## Example Use Cases
+
+### 🔬 **Data Quality Assessment**
+*"Are my features genuine biology or technical artifacts?"*
+
+Create separate rarefaction curves for annotated artifacts vs genuine events, then model their discovery rates to quantify data quality.
+
+### 💰 **Experimental Design**  
+*"Is sequencing deeper worth the cost?"*
+
+Model feature discovery to predict gains from additional sequencing and optimize your budget allocation.
+
+### 🧪 **Protocol Comparison**
+*"Which sequencing protocol discovers features most efficiently?"*
+
+Compare discovery curves across different protocols, platforms, or experimental conditions.
+
+### 📈 **Flexible Discovery Modeling**
+Model discovery of **custom feature annotation types:**
+- Differentially expressed genes
+- Novel isoforms  
+- Intron retention events
+- Splice junctions
+- Cell type markers
+
+---
+
+## Advanced Usage
+
+### Custom Parameters
+```r
+run_oracle_seq(
+  data_file = "data.rds",
+  analysis_name = "detailed_study",
+  thresholds = c(20, 10, 5, 1, 0.5, 0.1),    # Custom thresholds
+  bootstrap_samples = 2000,                    # More iterations
+  confidence_level = 0.99                     # Higher confidence
+)
+```
+
+### Multiple Analyses
+```r
+# Wrapper handles name conflicts automatically
+run_oracle_seq(data_file = "protocol_A.rds", analysis_name = "comparison")
+run_oracle_seq(data_file = "protocol_B.rds", analysis_name = "comparison")  # Creates "comparison_2"
+```
+
+---
+
+## Output Structure
+
+```
+results/
+├── my_study/
+│   ├── analysis_config.yaml      # Parameters used
+│   ├── statistical_analysis/     # Model results & reports  
+│   ├── plots/                   # All visualizations
+│   ├── reports/                 # Text summaries
+│   └── logs/                    # Analysis logs
+```
+
+---
+
+## How It Works
+
+**The ORACLE-seq Approach:**
+
+1. **Input:** Your rarefaction curve coordinates (reads vs features)
+2. **Model Competition:** 7 mathematical models compete to best describe your data
+3. **Uncertainty Quantification:** Bootstrap resampling generates confidence intervals
+4. **Extrapolation:** Predict feature discovery at higher sequencing depths
+5. **Recommendations:** Statistical backing for sequencing investment decisions
+
+**Statistical Foundation:**
+- Model selection via Akaike Information Criterion (AIC)
+- Bayesian Model Averaging accounts for model uncertainty
+- Bootstrap confidence intervals (1000+ iterations)
+- Coefficient of variation quantifies prediction reliability
+
+---
 
 ## Citation
 
-*[Publication details to be added]*
+*[Publication details coming soon]*
+
+**Developed for the Longbench project** - benchmarking matched ONT/PacBio datasets across scRNA-seq, snRNA-seq, bulk RNA-seq, and direct RNA-seq from lung carcinoma cell lines.
+
+---
 
 ## License
 
-*[License information to be added]* 
+*[License information to be added]*
+
+---
+
+## Contributing
+
+Found a bug? Want a feature? Open an issue or submit a pull request!
+
+**Contact:** mschauhan@student.unimelb.edu.au
