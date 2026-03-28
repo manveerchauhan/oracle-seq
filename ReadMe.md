@@ -195,14 +195,6 @@ Model feature discovery to predict gains from additional sequencing and optimize
 
 Compare discovery curves across different protocols, platforms, or experimental conditions.
 
-To Do: ### 📈 **Flexible Discovery Modeling**
-Check if model discovery is accurate with feature annotation types like: **
-- Differentially expressed genes
-- Novel isoforms  
-- Intron retention events
-- Splice junctions
-- Cell type markers
-
 ---
 
 ## Advanced Usage
@@ -260,8 +252,6 @@ results/
 ---
 
 ## Citation
-
-*[Publication details coming soon]*
 
 **Developed for the Longbench project** - benchmarking matched ONT/PacBio datasets across scRNA-seq, snRNA-seq, bulk RNA-seq, and direct RNA-seq from lung carcinoma cell lines.
 
